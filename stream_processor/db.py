@@ -39,6 +39,9 @@ CREATE TABLE IF NOT EXISTS vessel_track (
 
 CREATE INDEX IF NOT EXISTS idx_vessel_track_mmsi_time
     ON vessel_track (mmsi, event_time);
+
+CREATE INDEX IF NOT EXISTS idx_vessel_state_position
+    ON vessel_current_state USING gist (position);
 """
 
 UPSERT_STATE_SQL = """

@@ -14,4 +14,10 @@ export const getTrack = (mmsi) => request(`/vessels/${mmsi}/track`)
 export const getIntelligenceSummary = () => request('/intelligence/summary')
 export const getIntelligenceConflicts = (radiusM = 500) =>
   request(`/intelligence/conflicts?radius_m=${radiusM}`)
-export const getIntelligenceHotspots = () => request('/intelligence/hotspots?cell_deg=0.05')
+export const getIntelligenceSpeed = () => request('/intelligence/speed')
+export const getIntelligenceNavigation = () => request('/intelligence/navigation')
+export const getIntelligenceFlow = () => request('/intelligence/flow')
+export const getIntelligenceManeuvering = (minRotDegMin = 5) =>
+  request(`/intelligence/maneuvering?min_rot_deg_min=${minRotDegMin}`)
+export const getIntelligenceDataQuality = (windowHours = 24) =>
+  request(`/intelligence/data-quality?window_hours=${windowHours}`)

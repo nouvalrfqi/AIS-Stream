@@ -6,7 +6,8 @@ from ingestion.validator import parse_event_time
 def _partition_key(event: dict) -> tuple[str, str]:
     event_time = parse_event_time(event.get("event_time", ""))
     if event_time is None:
-        event_time = time.gmtime(event.get("ingested_at", 0))
+        ts = float(event.get("ingested_at") or time.time())
+        event_time = time.gmtime(ts)
         return time.strftime("%Y-%m-%d", event_time), time.strftime("%H", event_time)
     return event_time.strftime("%Y-%m-%d"), event_time.strftime("%H")
 

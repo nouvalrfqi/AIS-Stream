@@ -1,12 +1,64 @@
 import { useEffect, useState } from 'react'
 import {
   getIntelligenceConflicts,
-  getIntelligenceHotspots,
+  getIntelligenceDataQuality,
+  getIntelligenceFlow,
+  getIntelligenceManeuvering,
+  getIntelligenceNavigation,
+  getIntelligenceSpeed,
   getIntelligenceSummary,
 } from '../api.js'
 import { STATUS_COLORS, statusColor } from '../status.js'
+import { FlowRose, ManeuveringTable, NavStatusDonut, SpeedHistogram } from './IntelCharts.jsx'
 
 const POLL_MS = 15_000
+
+const SECTIONS = {
+  summary: getIntelligenceSummary,
+  conflicts: getIntelligenceConflicts,
+  speed: getIntelligenceSpeed,
+  navigation: getIntelligenceNavigation,
+  flow: getIntelligenceFlow,
+  maneuvering: () => getIntelligenceManeuvering(5),
+  dataQuality: () => getIntelligenceDataQuality(24),
+}
+
+function blankSections() {
+  return Object.fromEntries(Object.keys(SECTIONS).map((k) => [k, null]))
+}
+
+function useIntel() {
+  const [data, setData] = useState(blankSections)
+  const [errors, setErrors] = useState({})
+  useEffect(() => {
+    let cancelled = false
+    const tick = () => {
+      Object.entries(SECTIONS).forEach(([key, load]) => {
+        load()
+          .then((value) => {
+            if (cancelled) return
+            setData((d) => ({ ...d, [key]: value }))
+            setErrors((e) => {
+              if (!e[key]) return e
+              const next = { ...e }
+              delete next[key]
+              return next
+            })
+          })
+          .catch(() => {
+            if (!cancelled) setErrors((e) => ({ ...e, [key]: true }))
+          })
+      })
+    }
+    tick()
+    const id = setInterval(tick, POLL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [])
+  return { ...data, errors }
+}
 
 function fmt(v, suffix = '') {
   return v === null || v === undefined ? '—' : `${Number(v).toFixed ? Number(v).toFixed(1) : v}${suffix}`
@@ -16,28 +68,10 @@ function fmtM(m) {
   return m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(2)} km`
 }
 
-function useIntel() {
-  const [data, setData] = useState({ summary: null, conflicts: [], hotspots: [], error: false })
-  useEffect(() => {
-    let cancelled = false
-    const tick = () => {
-      Promise.all([getIntelligenceSummary(), getIntelligenceConflicts(), getIntelligenceHotspots()])
-        .then(([summary, conflicts, hotspots]) => {
-          if (cancelled) return
-          setData({ summary, conflicts, hotspots, error: false })
-        })
-        .catch(() => {
-          if (!cancelled) setData((d) => ({ ...d, error: true }))
-        })
-    }
-    tick()
-    const id = setInterval(tick, POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [])
-  return data
+function PanelState({ loading, error, children }) {
+  if (loading) return <p className="panel-state">Memuat…</p>
+  if (error) return <p className="panel-state error">Gagal memuat — mencoba lagi…</p>
+  return children
 }
 
 function StatCard({ label, value, sub, color }) {
@@ -96,10 +130,35 @@ function StatusBars({ byStatus }) {
   )
 }
 
-export default function Intelligence() {
-  const { summary, conflicts, hotspots, error } = useIntel()
+function DataQualityCards({ dq }) {
+  if (!dq) return null
+  return (
+    <div className="intel-stats dq-stats">
+      <StatCard label="AIS events (24 jam)" value={dq.events_processed} color="#2563eb" />
+      <StatCard label="File Parquet" value={dq.parquet_files} sub="di-scan" color="#64748b" />
+      <StatCard label="Latensi sumber (p50)" value={fmt(dq.latency?.p50_s, ' dtk')} color="#16a34a" />
+      <StatCard label="Latensi sumber (p95)" value={fmt(dq.latency?.p95_s, ' dtk')} color="#f59e0b" />
+      <StatCard label="Missing position" value={dq.missing_position ?? '—'} color={dq.missing_position > 0 ? '#ef4444' : '#16a34a'} />
+      <StatCard label="Missing SOG / COG" value={((dq.missing_sog ?? 0) + (dq.missing_cog ?? 0)) || '—'} color="#16a34a" />
+      <StatCard label="Koordinat invalid" value={dq.invalid_coordinates ?? '—'} color={dq.invalid_coordinates > 0 ? '#ef4444' : '#16a34a'} />
+      <StatCard label="Event latensi negatif" value={dq.latency?.events_negative_latency ?? '—'} sub="clock/skew" color="#64748b" />
+    </div>
+  )
+}
 
-  if (error && !summary) {
+export default function Intelligence() {
+  const {
+    summary,
+    conflicts,
+    speed,
+    navigation,
+    flow,
+    maneuvering,
+    dataQuality,
+    errors,
+  } = useIntel()
+
+  if (errors.summary && !summary) {
     return <div className="intel-empty">API tidak tersedia — menunggu kembali…</div>
   }
   if (!summary) {
@@ -111,7 +170,9 @@ export default function Intelligence() {
       <section className="intel-stats">
         <StatCard label="Total kapal" value={summary.total} />
         <StatCard label="Kapal bergerak" value={summary.moving} />
-        <StatCard label="Diam / berlabuh" value={summary.idle} />
+        <StatCard label="Berlabuh (anchor)" value={summary.anchored} color="#f59e0b" />
+        <StatCard label="Tertambat (moored)" value={summary.moored} color="#a855f7" />
+        <StatCard label="AIS events (12 jam)" value={summary.events_window} color="#2563eb" />
         <StatCard label="Data segar (<45 mnt)" value={summary.fresh} color="#22c55e" />
         <StatCard label="STALE (tidak ada sinyal)" value={summary.stale} color={statusColor('STALE')} />
         <StatCard label="Rata-rata kecepatan" value={fmt(summary.avg_sog)} sub="knot" />
@@ -120,60 +181,75 @@ export default function Intelligence() {
 
       <div className="intel-grid">
         <section className="panel">
+          <h3>Status navigasi</h3>
+          <PanelState loading={navigation === null} error={errors.navigation}>
+            <NavStatusDonut data={navigation} />
+          </PanelState>
+        </section>
+
+        <section className="panel">
+          <h3>Distribusi kecepatan</h3>
+          <PanelState loading={speed === null} error={errors.speed}>
+            <SpeedHistogram data={speed} />
+          </PanelState>
+        </section>
+
+        <section className="panel">
+          <h3>Arah lalu lintas (COG)</h3>
+          <PanelState loading={flow === null} error={errors.flow}>
+            <FlowRose data={flow} />
+          </PanelState>
+        </section>
+
+        <section className="panel">
           <h3>Komposisi status</h3>
           <StatusBars byStatus={summary.by_status} />
+        </section>
+      </div>
+
+      <div className="intel-grid">
+        <section className="panel">
+          <h3>Maneuvering activity — kapal dengan rotasi signifikan</h3>
+          <PanelState loading={maneuvering === null} error={errors.maneuvering}>
+            <ManeuveringTable result={maneuvering} />
+          </PanelState>
         </section>
 
         <section className="panel">
           <h3>Potensi konflik — pasangan kapal dalam jarak dekat</h3>
-          {conflicts.length === 0 ? (
-            <p className="intel-empty">Tidak ada pasangan dalam radius terpantau.</p>
-          ) : (
-            <div className="conflicts-scroll">
-              <table className="conflicts">
-                <thead>
-                  <tr>
-                    <th>Jarak</th>
-                    <th>Kapal A</th>
-                    <th>SOG</th>
-                    <th>Kapal B</th>
-                    <th>SOG</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {conflicts.map((p) => (
-                    <ConflictRow key={`${p.a.mmsi}-${p.b.mmsi}`} pair={p} />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-
-        <section className="panel">
-          <h3>Zona terpadat (sel ± 0,05° ≈ 5 km)</h3>
-          {hotspots.length === 0 ? (
-            <p className="intel-empty">Belum ada zona terukur.</p>
-          ) : (
-            <table className="conflicts">
-              <thead>
-                <tr>
-                  <th>Zona (lat, lon)</th>
-                  <th>Kapal</th>
-                </tr>
-              </thead>
-              <tbody>
-                {hotspots.slice(0, 10).map((c) => (
-                  <tr key={`${c.latitude}-${c.longitude}`}>
-                    <td>{c.latitude.toFixed(2)}, {c.longitude.toFixed(2)}</td>
-                    <td>{c.count}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+          <PanelState loading={conflicts === null} error={errors.conflicts}>
+            {(conflicts ?? []).length === 0 ? (
+              <p className="intel-empty">Tidak ada pasangan dalam radius terpantau.</p>
+            ) : (
+              <div className="conflicts-scroll">
+                <table className="conflicts">
+                  <thead>
+                    <tr>
+                      <th>Jarak</th>
+                      <th>Kapal A</th>
+                      <th>SOG</th>
+                      <th>Kapal B</th>
+                      <th>SOG</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {conflicts.map((p) => (
+                      <ConflictRow key={`${p.a.mmsi}-${p.b.mmsi}`} pair={p} />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </PanelState>
         </section>
       </div>
+
+      <section className="panel panel-full">
+        <h3>Kesehatan data &amp; sumber (window 24 jam)</h3>
+        <PanelState loading={dataQuality === null} error={errors.dataQuality}>
+          <DataQualityCards dq={dataQuality} />
+        </PanelState>
+      </section>
     </div>
   )
 }

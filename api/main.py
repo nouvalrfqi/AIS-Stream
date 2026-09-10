@@ -1,16 +1,22 @@
+import math
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-from api import db
+from api import data_quality, db
 from api.config import load_config
 from api.schemas import (
     ConflictPair,
     ConflictVessel,
+    DataQualityResult,
+    FlowDistribution,
     Health,
-    HotspotCell,
     IntelligenceSummary,
+    ManeuveringResult,
+    NavDistribution,
     NearbyResult,
+    SpeedDistribution,
     StatusCount,
     TrackPoint,
     VesselDetail,
@@ -27,6 +33,40 @@ SELECT_STATE_COLS = (
 
 VALID_MMSI = "mmsi ~ '^[0-9]{9}$'"
 STALE_MINUTES = 45
+
+NAV_STATUS_LABELS = {
+    0: "Underway",
+    1: "At Anchor",
+    2: "Not Under Command",
+    3: "Restricted Manoeuverability",
+    4: "Constrained by Draught",
+    5: "Moored",
+    6: "Aground",
+    7: "Engaged in Fishing",
+    8: "Underway Sailing",
+    14: "AIS-SART",
+    15: "Undefined",
+}
+
+FLOW_LABELS = [
+    "N", "NNE", "NE", "ENE",
+    "E", "ESE", "SE", "SSE",
+    "S", "SSW", "SW", "WSW",
+    "W", "WNW", "NW", "NNW",
+]
+
+FAST_ROT_DEG_MIN = 10.0
+
+
+def _decode_rot(value: float | None) -> tuple[float | None, str | None, float]:
+    if value is None:
+        return None, None, 0.0
+    magnitude = abs(value)
+    if magnitude >= 127:
+        return None, ("port" if value > 0 else "starboard"), FAST_ROT_DEG_MIN
+    deg_min = round(4.733 * math.sqrt(magnitude), 1)
+    direction = "starboard" if value > 0 else "port"
+    return deg_min, direction, deg_min
 
 app = FastAPI(title="Maritime Real-Time Platform API", version="1.0.0")
 
@@ -121,9 +161,17 @@ def intelligence_summary() -> dict:
             f"count(*) FILTER (WHERE status = 'STALE') AS stale, "
             f"count(*) FILTER (WHERE COALESCE(sog_knots, 0) > 0.5) AS moving, "
             f"count(*) FILTER (WHERE COALESCE(sog_knots, 0) <= 0.5) AS idle, "
+            f"count(*) FILTER (WHERE status = 'ANCHORED') AS anchored, "
+            f"count(*) FILTER (WHERE status = 'MOORED') AS moored, "
             f"avg(sog_knots) AS avg_sog, max(sog_knots) AS max_sog "
             f"FROM vessel_current_state WHERE {VALID_MMSI}",
         )[0]
+        events_window = db.fetch_all(
+            config,
+            "SELECT count(*) AS events_window FROM vessel_track "
+            "WHERE event_time > now() - make_interval(hours => %s)",
+            (config["track_window_hours"],),
+        )[0]["events_window"]
         by_status = db.fetch_all(
             config,
             f"SELECT status, count(*) AS count FROM vessel_current_state "
@@ -142,6 +190,9 @@ def intelligence_summary() -> dict:
         "stale": agg["stale"],
         "moving": agg["moving"],
         "idle": agg["idle"],
+        "anchored": agg["anchored"],
+        "moored": agg["moored"],
+        "events_window": int(events_window),
         "avg_sog": agg["avg_sog"],
         "max_sog": agg["max_sog"],
         "fastest": fastest[0] if fastest else None,
@@ -149,24 +200,149 @@ def intelligence_summary() -> dict:
     }
 
 
+@app.get("/intelligence/speed", response_model=SpeedDistribution)
+def intelligence_speed() -> dict:
+    try:
+        buckets = db.fetch_all(
+            config,
+            f"SELECT width_bucket(sog_knots, 0, 20, 20) AS bucket, count(*) AS count "
+            f"FROM vessel_current_state WHERE {VALID_MMSI} AND sog_knots IS NOT NULL "
+            f"GROUP BY bucket ORDER BY bucket",
+        )
+        stats = db.fetch_all(
+            config,
+            f"SELECT avg(sog_knots) AS avg_sog, "
+            f"percentile_cont(0.5) WITHIN GROUP (ORDER BY sog_knots) AS p50_sog, "
+            f"max(sog_knots) AS max_sog, count(*) AS sample_n "
+            f"FROM vessel_current_state WHERE {VALID_MMSI} AND sog_knots IS NOT NULL",
+        )[0]
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"database unavailable: {exc}") from exc
+    return {
+        "buckets": [
+            {"bucket_min": b["bucket"] - 1,
+             "bucket_max": None if b["bucket"] > 20 else float(b["bucket"]),
+             "count": b["count"]}
+            for b in buckets
+        ],
+        "avg_sog": stats["avg_sog"],
+        "p50_sog": stats["p50_sog"],
+        "max_sog": stats["max_sog"],
+        "sample_n": stats["sample_n"],
+    }
+
+
+@app.get("/intelligence/navigation", response_model=NavDistribution)
+def intelligence_navigation() -> dict:
+    try:
+        rows = db.fetch_all(
+            config,
+            f"SELECT nav_status, count(*) AS count FROM vessel_current_state "
+            f"WHERE {VALID_MMSI} GROUP BY nav_status ORDER BY count DESC",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"database unavailable: {exc}") from exc
+    grouped: dict[str, dict] = {}
+    for r in rows:
+        code = r["nav_status"]
+        label = NAV_STATUS_LABELS.get(code, "Reserved" if code is not None else "Unknown")
+        bucket = grouped.get(label)
+        if bucket is None:
+            grouped[label] = {"code": code, "label": label, "count": r["count"]}
+        else:
+            bucket["count"] += r["count"]
+    buckets = sorted(grouped.values(), key=lambda b: b["count"], reverse=True)
+    return {"buckets": buckets, "total": sum(b["count"] for b in buckets)}
+
+
+@app.get("/intelligence/flow", response_model=FlowDistribution)
+def intelligence_flow() -> dict:
+    try:
+        rows = db.fetch_all(
+            config,
+            f"SELECT mod(round(cog_degrees / 22.5)::int, 16) AS sector, "
+            f"count(*) AS count, avg(sog_knots) AS avg_sog "
+            f"FROM vessel_current_state "
+            f"WHERE {VALID_MMSI} AND status IS DISTINCT FROM 'STALE' "
+            f"AND cog_degrees IS NOT NULL AND cog_degrees >= 0 AND cog_degrees < 360 "
+            f"GROUP BY sector ORDER BY sector",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"database unavailable: {exc}") from exc
+    buckets = []
+    for r in rows:
+        sector = (r["sector"] % 16 + 16) % 16
+        buckets.append({
+            "sector_deg": float(sector * 22.5),
+            "label": FLOW_LABELS[sector],
+            "count": r["count"],
+            "avg_sog": r["avg_sog"],
+        })
+    return {"buckets": buckets, "total": sum(b["count"] for b in buckets)}
+
+
+@app.get("/intelligence/maneuvering", response_model=ManeuveringResult)
+def intelligence_maneuvering(
+    min_rot_deg_min: float = Query(5.0, ge=0, le=180),
+) -> dict:
+    try:
+        rows = db.fetch_all(
+            config,
+            f"SELECT mmsi, ship_name, rate_of_turn, sog_knots, nav_status "
+            f"FROM vessel_current_state WHERE {VALID_MMSI} AND rate_of_turn IS NOT NULL "
+            f"ORDER BY abs(rate_of_turn) DESC LIMIT 100",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"database unavailable: {exc}") from exc
+    vessels = []
+    for r in rows:
+        rot_deg_min, direction, effective = _decode_rot(r["rate_of_turn"])
+        if effective < min_rot_deg_min:
+            continue
+        vessels.append({
+            "mmsi": r["mmsi"],
+            "ship_name": r["ship_name"],
+            "rate_of_turn": r["rate_of_turn"],
+            "rot_deg_min": rot_deg_min,
+            "direction": direction,
+            "sog_knots": r["sog_knots"],
+            "nav_status": r["nav_status"],
+        })
+    return {"threshold_deg_min": min_rot_deg_min, "vessels": vessels}
+
+
+@app.get("/intelligence/data-quality", response_model=DataQualityResult)
+def intelligence_data_quality(
+    window_hours: int = Query(data_quality.DEFAULT_WINDOW_HOURS, gt=0, le=168),
+) -> dict:
+    try:
+        return data_quality.get_data_quality(window_hours)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"data-quality unavailable: {exc}") from exc
+
+
 @app.get("/intelligence/conflicts", response_model=list[ConflictPair])
 def intelligence_conflicts(
     radius_m: float = Query(500, gt=0, le=20000),
 ) -> list[dict]:
     try:
+        margin_deg = radius_m / 111_000
         rows = db.fetch_all(
             config,
-            "WITH s AS (SELECT mmsi, ship_name, latitude, longitude, sog_knots, status, position "
+            "WITH s AS (SELECT mmsi, ship_name, latitude, longitude, sog_knots, status, "
+            "position::geometry AS pos "
             f"FROM vessel_current_state WHERE {VALID_MMSI}) "
             "SELECT sa.mmsi AS ammsi, sa.ship_name AS aship, sa.latitude AS alat, sa.longitude AS alon, "
             "sa.sog_knots AS asog, sa.status AS astat, "
             "sb.mmsi AS bmmsi, sb.ship_name AS bship, sb.latitude AS blat, sb.longitude AS blon, "
             "sb.sog_knots AS bsog, sb.status AS bstat, "
-            "ST_Distance(sa.position, sb.position) AS distance_m "
+            "ST_Distance(sa.pos::geography, sb.pos::geography) AS distance_m "
             "FROM s sa JOIN s sb ON sa.mmsi < sb.mmsi "
-            "WHERE ST_DWithin(sa.position, sb.position, %s) "
+            "WHERE abs(sa.latitude - sb.latitude) < %s "
+            "AND abs(sa.longitude - sb.longitude) < %s "
+            "AND ST_DWithin(sa.pos, sb.pos, %s) "
             "ORDER BY distance_m ASC LIMIT 50",
-            (radius_m,),
+            (margin_deg, margin_deg, radius_m / 111_000),
         )
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"database unavailable: {exc}") from exc
@@ -184,21 +360,3 @@ def intelligence_conflicts(
     return [
         {"a": vessel(r, "a"), "b": vessel(r, "b"), "distance_m": r["distance_m"]} for r in rows
     ]
-
-
-@app.get("/intelligence/hotspots", response_model=list[HotspotCell])
-def intelligence_hotspots(
-    cell_deg: float = Query(0.05, gt=0, le=1),
-) -> list[dict]:
-    try:
-        return db.fetch_all(
-            config,
-            "SELECT ROUND(latitude / %s) * %s AS latitude, "
-            "ROUND(longitude / %s) * %s AS longitude, count(*) AS count "
-            f"FROM vessel_current_state WHERE {VALID_MMSI} AND status IS DISTINCT FROM 'STALE' "
-            "GROUP BY ROUND(latitude / %s) * %s, ROUND(longitude / %s) * %s "
-            "ORDER BY count DESC LIMIT 200",
-            (cell_deg, cell_deg, cell_deg, cell_deg, cell_deg, cell_deg, cell_deg, cell_deg),
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"database unavailable: {exc}") from exc
