@@ -8,6 +8,9 @@ services:
       ZOOKEEPER_HEAP_OPTS: "-Xms128m -Xmx256m"
     ports:
       - "2181:2181"
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_log:/var/lib/zookeeper/log
     restart: unless-stopped
 
   kafka:
@@ -29,6 +32,8 @@ services:
       KAFKA_HEAP_OPTS: "-Xms256m -Xmx512m"
     ports:
       - "9092:9092"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:29092", "--list"]
@@ -36,6 +41,25 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
+
+  minio:
+    image: minio/minio:latest
+    container_name: maritime-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   postgis:
     image: postgis/postgis:16-3.4
@@ -56,4 +80,8 @@ services:
     restart: unless-stopped
 
 volumes:
+  zookeeper_data:
+  zookeeper_log:
+  kafka_data:
   postgis_data:
+  minio_data:
