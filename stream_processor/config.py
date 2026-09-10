@@ -9,6 +9,7 @@ def load_config() -> dict:
     return {
         "kafka_bootstrap_servers": os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
         "kafka_topic_raw": os.getenv("KAFKA_TOPIC_RAW", "ais.raw"),
+        "kafka_topic_dlq": os.getenv("KAFKA_TOPIC_DLQ", "ais.dlq"),
         "kafka_consumer_group_state": os.getenv("KAFKA_CONSUMER_GROUP_STATE", "realtime-state"),
         "postgres_url": os.getenv("POSTGRES_URL", "postgresql://maritime:maritime@localhost:5432/maritime"),
         "state_flush_rows": int(os.getenv("STATE_FLUSH_ROWS", "500")),

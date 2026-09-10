@@ -6,6 +6,7 @@ import pyarrow.parquet as pq
 SCHEMA = pa.schema(
     [
         pa.field("event_id", pa.string()),
+        pa.field("schema_version", pa.string()),
         pa.field("message_type", pa.string()),
         pa.field("mmsi", pa.string()),
         pa.field("ship_name", pa.string()),
@@ -33,6 +34,7 @@ def _denull_numeric(value):
 def _normalize_row(event: dict) -> dict:
     return {
         "event_id": event.get("event_id"),
+        "schema_version": event.get("schema_version", "1.0"),
         "message_type": event.get("message_type"),
         "mmsi": str(event.get("mmsi")),
         "ship_name": event.get("ship_name"),

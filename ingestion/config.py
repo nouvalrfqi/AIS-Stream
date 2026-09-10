@@ -16,6 +16,7 @@ def load_config() -> dict:
         "filter_message_types": json.loads(os.getenv("AISSTREAM_FILTER_MESSAGE_TYPES", '["PositionReport"]')),
         "kafka_bootstrap_servers": os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
         "kafka_topic_raw": os.getenv("KAFKA_TOPIC_RAW", "ais.raw"),
+        "kafka_topic_dlq": os.getenv("KAFKA_TOPIC_DLQ", "ais.dlq"),
         "reconnect_base_seconds": float(os.getenv("INGEST_RECONNECT_BASE", "1")),
         "reconnect_max_seconds": float(os.getenv("INGEST_RECONNECT_MAX", "60")),
         "reconnect_jitter_seconds": float(os.getenv("INGEST_RECONNECT_JITTER", "0.3")),

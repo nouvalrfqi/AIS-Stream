@@ -1,6 +1,7 @@
 import json
 import logging
 
+from common.dlq import close_dlq, init_dlq
 from stream_processor import db
 from stream_processor.config import load_config
 from stream_processor.consumer import StreamProcessorConsumer
@@ -29,8 +30,12 @@ def main() -> None:
     conn.close()
     _log("info", "postgis schema ensured")
 
+    dlq_producer = init_dlq(config["kafka_bootstrap_servers"], config["kafka_topic_dlq"])
+    config["dlq_producer"] = dlq_producer
+
     consumer = StreamProcessorConsumer(config, _log)
     consumer.run()
+    close_dlq(dlq_producer)
 
 
 if __name__ == "__main__":

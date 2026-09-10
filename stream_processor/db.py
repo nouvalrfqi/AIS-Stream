@@ -1,3 +1,4 @@
+import time
 from datetime import datetime, timezone
 
 import psycopg2
@@ -90,7 +91,7 @@ def _event_time(event: dict) -> datetime:
     parsed = parse_event_time(str(event.get("event_time") or ""))
     if parsed is not None:
         return parsed
-    return datetime.fromtimestamp(float(event.get("ingested_at") or 0), tz=timezone.utc)
+    return datetime.fromtimestamp(float(event.get("ingested_at") or time.time()), tz=timezone.utc)
 
 
 def build_rows(events: list[dict]) -> tuple[list[tuple], list[tuple]]:

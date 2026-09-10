@@ -5,11 +5,15 @@ from .validator import SENTINEL_HEADING, SENTINEL_RATE_OF_TURN, parse_event_time
 
 
 def _to_heading(value):
-    return None if value == SENTINEL_HEADING else float(value)
+    if value is None or value == SENTINEL_HEADING:
+        return None
+    return float(value)
 
 
 def _to_rate_of_turn(value):
-    return None if value == SENTINEL_RATE_OF_TURN else float(value)
+    if value is None or value == SENTINEL_RATE_OF_TURN:
+        return None
+    return float(value)
 
 
 def _event_id(raw: dict) -> str:
@@ -22,6 +26,7 @@ def normalize(raw: dict, received_at: float) -> dict:
 
     return {
         "event_id": _event_id(raw),
+        "schema_version": "1.0",
         "message_type": raw.get("MessageType"),
         "mmsi": str(meta.get("MMSI")),
         "ship_name": meta.get("ShipName").strip() if isinstance(meta.get("ShipName"), str) else None,
