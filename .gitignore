@@ -1,4 +1,5 @@
 .env
+.env.systemd
 venv/
 __pycache__/
 profiling/data/

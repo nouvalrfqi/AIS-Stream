@@ -1,0 +1,18 @@
+[Unit]
+Description=Maritime Stream Processor (Kafka ais.raw -> PostGIS state/track)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=<ROOT>
+EnvironmentFile=<ROOT>/.env.systemd
+ExecStart=<ROOT>/venv/bin/python -m stream_processor.main
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=maritime-stream-processor
+
+[Install]
+WantedBy=multi-user.target

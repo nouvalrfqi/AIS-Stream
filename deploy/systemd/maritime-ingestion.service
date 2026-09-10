@@ -1,0 +1,18 @@
+[Unit]
+Description=Maritime AIS Ingestion (WebSocket pull -> Kafka)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=<ROOT>
+EnvironmentFile=<ROOT>/.env.systemd
+ExecStart=<ROOT>/venv/bin/python -m ingestion.main
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=maritime-ingestion
+
+[Install]
+WantedBy=multi-user.target

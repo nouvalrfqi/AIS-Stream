@@ -1,0 +1,18 @@
+[Unit]
+Description=Maritime Raw Sink (Kafka ais.raw -> Parquet on S3)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=<ROOT>
+EnvironmentFile=<ROOT>/.env.systemd
+ExecStart=<ROOT>/venv/bin/python -m raw_sink.main
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=maritime-raw-sink
+
+[Install]
+WantedBy=multi-user.target

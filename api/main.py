@@ -72,7 +72,7 @@ app = FastAPI(title="Maritime Real-Time Platform API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=config["cors_origins"],
     allow_methods=["*"],
     allow_headers=["*"],
 )

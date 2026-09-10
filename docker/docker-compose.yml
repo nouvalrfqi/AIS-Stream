@@ -12,12 +12,19 @@ services:
       - zookeeper_data:/var/lib/zookeeper/data
       - zookeeper_log:/var/lib/zookeeper/log
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "echo srvr | nc -w 3 localhost 2181 | grep -q 'Zookeeper version'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   kafka:
     image: confluentinc/cp-kafka:7.5.0
     container_name: maritime-kafka
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_healthy
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
@@ -44,7 +51,7 @@ services:
       start_period: 30s
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     container_name: maritime-minio
     command: server /data --console-address ":9001"
     environment:
