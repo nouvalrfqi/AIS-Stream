@@ -11,3 +11,7 @@ async function request(path) {
 export const getVessels = () => request('/vessels')
 export const getVessel = (mmsi) => request(`/vessels/${mmsi}`)
 export const getTrack = (mmsi) => request(`/vessels/${mmsi}/track`)
+export const getIntelligenceSummary = () => request('/intelligence/summary')
+export const getIntelligenceConflicts = (radiusM = 500) =>
+  request(`/intelligence/conflicts?radius_m=${radiusM}`)
+export const getIntelligenceHotspots = () => request('/intelligence/hotspots?cell_deg=0.05')

@@ -2,10 +2,12 @@ import { useCallback, useEffect, useState } from 'react'
 import { getTrack, getVessel, getVessels } from './api.js'
 import VesselMap from './components/VesselMap.jsx'
 import DetailPanel from './components/DetailPanel.jsx'
+import Intelligence from './components/Intelligence.jsx'
 
 const POLL_MS = 10_000
 
 export default function App() {
+  const [tab, setTab] = useState('live')
   const [vessels, setVessels] = useState([])
   const [apiStatus, setApiStatus] = useState('loading')
   const [selected, setSelected] = useState(null)
@@ -54,18 +56,31 @@ export default function App() {
 
   return (
     <div className="app">
-      <VesselMap
-        vessels={vessels}
-        showStale={showStale}
-        track={track}
-        selectedMmsi={selected?.mmsi}
-        onSelect={handleSelect}
-        onToggleStale={setShowStale}
-      />
-      {apiStatus === 'error' && (
-        <div className="api-banner">API tidak tersedia — menunggu kembali…</div>
+      <nav className="tabbar">
+        <button type="button" className={`tab${tab === 'live' ? ' active' : ''}`} onClick={() => setTab('live')}>
+          Peta Live
+        </button>
+        <button type="button" className={`tab${tab === 'intel' ? ' active' : ''}`} onClick={() => setTab('intel')}>
+          Intelligence
+        </button>
+      </nav>
+      {tab === 'live' && (
+        <>
+          <VesselMap
+            vessels={vessels}
+            showStale={showStale}
+            track={track}
+            selectedMmsi={selected?.mmsi}
+            onSelect={handleSelect}
+            onToggleStale={setShowStale}
+          />
+          {apiStatus === 'error' && (
+            <div className="api-banner">API tidak tersedia — menunggu kembali…</div>
+          )}
+          {selected && <DetailPanel vessel={detail ?? selected} track={track} onClose={() => handleSelect(null)} />}
+        </>
       )}
-      {selected && <DetailPanel vessel={detail ?? selected} track={track} onClose={() => handleSelect(null)} />}
+      {tab === 'intel' && <Intelligence />}
     </div>
   )
 }
