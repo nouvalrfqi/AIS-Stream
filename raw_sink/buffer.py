@@ -13,9 +13,10 @@ def _partition_key(event: dict) -> tuple[str, str]:
 
 
 class BatchBuffer:
-    def __init__(self, max_rows: int, max_seconds: int):
+    def __init__(self, max_rows: int, max_seconds: int, min_rows: int = 1):
         self.max_rows = max_rows
         self.max_seconds = max_seconds
+        self.min_rows = min_rows
         self._events: list[dict] = []
         self._first_event_at: float | None = None
 
@@ -29,10 +30,13 @@ class BatchBuffer:
             return False
         if len(self._events) >= self.max_rows:
             return True
+        now = now or time.time()
         if self._first_event_at is None:
             return False
-        now = now or time.time()
-        return now - self._first_event_at >= self.max_seconds
+        time_triggered = now - self._first_event_at >= self.max_seconds
+        if time_triggered:
+            return len(self._events) >= self.min_rows
+        return False
 
     def drain(self) -> dict[tuple[str, str], list[dict]]:
         grouped: dict[tuple[str, str], list[dict]] = {}
