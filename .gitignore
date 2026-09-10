@@ -4,5 +4,9 @@ __pycache__/
 profiling/data/
 *.pyc
 .DS_Store
+f7_arrow_map.png
+f7_arrow_fixed_map.png
+f7_solid_map.png
+f7_paperplane_map.png
 maritime_real_time_data_platform_product_knowledge.md
 PRD.md
