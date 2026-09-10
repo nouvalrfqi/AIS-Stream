@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 SENTINEL_HEADING = 511
 SENTINEL_RATE_OF_TURN = -128
@@ -28,9 +28,30 @@ SUPPORTED_MESSAGE_TYPES = {"PositionReport", "SubscriptionConfirmation", "ShipSt
 
 def parse_event_time(value: str) -> datetime | None:
     try:
-        return datetime.fromisoformat(value.replace(" UTC", "").strip())
+        parsed = datetime.fromisoformat(value.replace(" UTC", "").strip())
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def classify_skew(
+    time_utc: str,
+    received_at: float,
+    future_tolerance_seconds: float,
+    stale_tolerance_seconds: float,
+) -> str | None:
+    """Classify timestamp skew vs ingest time. Returns reason for DLQ or None if OK."""
+    event_time = parse_event_time(str(time_utc))
+    if event_time is None:
+        return "unparseable_timestamp"
+    skew_seconds = event_time.timestamp() - float(received_at)
+    if skew_seconds > future_tolerance_seconds:
+        return "future_timestamp"
+    if skew_seconds < -stale_tolerance_seconds:
+        return "stale_timestamp"
+    return None
 
 
 def validate_message(raw: dict) -> tuple[bool, list[str]]:

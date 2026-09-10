@@ -20,5 +20,7 @@ def load_config() -> dict:
         "reconnect_base_seconds": float(os.getenv("INGEST_RECONNECT_BASE", "1")),
         "reconnect_max_seconds": float(os.getenv("INGEST_RECONNECT_MAX", "60")),
         "reconnect_jitter_seconds": float(os.getenv("INGEST_RECONNECT_JITTER", "0.3")),
+        "future_skew_tolerance_seconds": float(os.getenv("INGEST_FUTURE_SKEW_TOLERANCE_SECONDS", "60")),
+        "stale_skew_tolerance_seconds": float(os.getenv("INGEST_STALE_SKEW_TOLERANCE_SECONDS", "21600")),
         "log_level": os.getenv("INGEST_LOG_LEVEL", "INFO"),
     }

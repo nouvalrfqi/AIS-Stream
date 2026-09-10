@@ -9,7 +9,7 @@ from .ais_client import consume
 from .config import load_config
 from .kafka_producer import AisKafkaProducer
 from .normalizer import normalize
-from .validator import parse_event_time, validate_message
+from .validator import classify_skew, parse_event_time, validate_message
 
 logger = logging.getLogger("ingestion")
 
@@ -20,7 +20,14 @@ def _log(level: str, msg: str, **fields):
     getattr(logger, level)(json.dumps(record))
 
 
-async def _handle_event(raw: dict, producer: AisKafkaProducer, dlq_producer, dlq_topic: str) -> None:
+async def _handle_event(
+    raw: dict,
+    producer: AisKafkaProducer,
+    dlq_producer,
+    dlq_topic: str,
+    future_skew_tolerance: float,
+    stale_skew_tolerance: float,
+) -> None:
     message_type = raw.get("MessageType")
     if message_type != "PositionReport":
         _log("debug", "non-position-report message skipped", message_type=str(message_type))
@@ -37,6 +44,23 @@ async def _handle_event(raw: dict, producer: AisKafkaProducer, dlq_producer, dlq
     event_time = parse_event_time(canonical["event_time"])
     event_epoch = event_time.timestamp() if event_time else 0.0
     latency_ms = int((canonical["ingested_at"] - event_epoch) * 1000)
+
+    skew_reason = classify_skew(
+        canonical["event_time"],
+        canonical["ingested_at"],
+        future_skew_tolerance,
+        stale_skew_tolerance,
+    )
+    if skew_reason is not None:
+        send_to_dlq(dlq_producer, dlq_topic, canonical, reason=skew_reason, source="ingestion")
+        _log(
+            "warn",
+            "event sent to DLQ",
+            mmsi=canonical["mmsi"],
+            reason=skew_reason,
+            latency_ms=latency_ms,
+        )
+        return
 
     future = producer.send(canonical)
     try:
@@ -94,7 +118,14 @@ async def main() -> None:
             pass
 
     async def handler(raw):
-        await _handle_event(raw, producer, dlq_producer, config["kafka_topic_dlq"])
+        await _handle_event(
+            raw,
+            producer,
+            dlq_producer,
+            config["kafka_topic_dlq"],
+            config["future_skew_tolerance_seconds"],
+            config["stale_skew_tolerance_seconds"],
+        )
 
     await consume(config, on_event=handler, log=_log)
     producer.close()
