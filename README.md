@@ -240,20 +240,24 @@ Topics `ais.raw` and `ais.dlq` are created automatically with `KAFKA_PARTITIONS=
 
 ## Deployment
 
-Two layers — containerized stateful infrastructure and host-managed stateless workers:
+Three layers — containerized stateful infrastructure, nginx as the public entry, and host-managed stateless workers:
 
 | Layer | Mechanism | Notes |
 |---|---|---|
 | Infra (ZK, Kafka, MinIO, PostGIS) | `docker compose` | healthchecks + `restart: unless-stopped`; pinned image tags (e.g. `minio/minio:RELEASE.2025-09-07T16-13-09Z`) for reproducible deploys |
-| Workers (ingestion, raw_sink, stream_processor, cleanup) | systemd units | `Restart=always`, `EnvironmentFile=<root>/.env.systemd`, `WorkingDirectory` pinned |
+| Public HTTP | **nginx** (`deploy/nginx.conf`) | serves the built SPA, proxies `/api` → uvicorn on loopback, immutable-caches hashed assets, single-origin (no CORS at runtime) |
+| Workers (ingestion, raw_sink, stream_processor, cleanup, api) | systemd units | `Restart=always`, `EnvironmentFile=<root>/.env.systemd`, API bound to `127.0.0.1` (only nginx reaches it) |
 
 ```bash
-# Install systemd units (idempotent; run as root on the host)
+# 1. Build the production frontend (same-origin /api)
+./deploy/build-frontend.sh
+
+# 2. Install systemd units + nginx site (idempotent; run as root on the host)
 sudo ./deploy/install-systemd.sh
 systemctl enable --now maritime-ingestion maritime-stream-processor maritime-raw-sink maritime-cleanup maritime-api
 ```
 
-The installer normalizes `.env` → `.env.systemd` (systemd pulls exact `KEY=VALUE` pairs) and rewrites each unit's paths to the absolute project root. `.env` and `.env.systemd` are gitignored; secrets never leave the host.
+The installer normalizes `.env` → `.env.systemd` (systemd pulls exact `KEY=VALUE` pairs), substitutes `<ROOT>` with the absolute project path in every unit and the nginx site, and reloads nginx after `nginx -t`. Deploy from a **space-free path** (e.g. `/opt/maritim-tracking`): a quoted nginx `root` combined with `try_files` triggers a redirection cycle, so paths are taken literally. `.env` and `.env.systemd` are gitignored; secrets never leave the host.
 
 ---
 
