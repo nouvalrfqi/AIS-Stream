@@ -19,14 +19,30 @@ class StreamProcessorConsumer:
         self._first_event_at: float | None = None
         self.failures = 0
         self.conn = db.connect(config)
-        self.consumer = KafkaConsumer(
-            config["kafka_topic_raw"],
-            bootstrap_servers=config["kafka_bootstrap_servers"],
-            group_id=config["kafka_consumer_group_state"],
+        self.consumer = self._connect_consumer()
+
+    def _connect_consumer(self):
+        return KafkaConsumer(
+            self.config["kafka_topic_raw"],
+            bootstrap_servers=self.config["kafka_bootstrap_servers"],
+            group_id=self.config["kafka_consumer_group_state"],
             enable_auto_commit=False,
             auto_offset_reset="earliest",
             key_deserializer=lambda k: k.decode("utf-8") if k else None,
             value_deserializer=lambda v: json.loads(v.decode("utf-8")),
+        )
+
+    def _reconnect(self, error=None) -> None:
+        try:
+            self.consumer.close()
+        except Exception:
+            pass
+        self.consumer = self._connect_consumer()
+        self.log(
+            "warn",
+            "consumer reconnecting",
+            error=str(error) if error else None,
+            group=self.config["kafka_consumer_group_state"],
         )
 
     def _should_flush(self) -> bool:
@@ -147,31 +163,40 @@ class StreamProcessorConsumer:
         self.log("info", "stream processor started", group=self.config["kafka_consumer_group_state"])
         try:
             while True:
-                if self._should_flush():
-                    if not self._flush():
-                        if self.failures >= MAX_RETAIN_RETRIES and self.buffer:
-                            self.log(
-                                "warn",
-                                "max retries reached, isolating poison events",
-                                failures=self.failures,
-                            )
-                            if self._isolate_poison():
-                                self.failures = 0
-                            else:
-                                self.failures = 0
-                                self.buffer, self._first_event_at = self.buffer, time.time()
-                        time.sleep(retry_sleep_seconds)
-                        continue
-
-                records = self.consumer.poll(timeout_ms=poll_timeout_ms, max_records=500)
-                for topic_partition, messages in records.items():
-                    for msg in messages:
-                        event = msg.value
-                        if event is None:
+                try:
+                    if self._should_flush():
+                        if not self._flush():
+                            if self.failures >= MAX_RETAIN_RETRIES and self.buffer:
+                                self.log(
+                                    "warn",
+                                    "max retries reached, isolating poison events",
+                                    failures=self.failures,
+                                )
+                                if self._isolate_poison():
+                                    self.failures = 0
+                                else:
+                                    self.failures = 0
+                                    self.buffer, self._first_event_at = self.buffer, time.time()
+                            time.sleep(retry_sleep_seconds)
                             continue
-                        if not self.buffer:
-                            self._first_event_at = time.time()
-                        self.buffer.append(event)
+
+                    records = self.consumer.poll(timeout_ms=poll_timeout_ms, max_records=500)
+                    for topic_partition, messages in records.items():
+                        for msg in messages:
+                            event = msg.value
+                            if event is None:
+                                continue
+                            if not self.buffer:
+                                self._first_event_at = time.time()
+                            self.buffer.append(event)
+                except Exception as exc:
+                    self.log(
+                        "error",
+                        "consumer error, reconnecting",
+                        error=str(exc),
+                    )
+                    self._reconnect(error=exc)
+                    time.sleep(min(retry_sleep_seconds * 4, 60.0))
         except KeyboardInterrupt:
             pass
         finally:

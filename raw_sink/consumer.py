@@ -29,14 +29,30 @@ class RawSinkConsumer:
             max_seconds=config["parquet_max_seconds"],
             min_rows=config.get("parquet_min_rows", 1),
         )
-        self.consumer = KafkaConsumer(
-            config["kafka_topic_raw"],
-            bootstrap_servers=config["kafka_bootstrap_servers"],
-            group_id=config["kafka_consumer_group"],
+        self.consumer = self._connect_consumer()
+
+    def _connect_consumer(self):
+        return KafkaConsumer(
+            self.config["kafka_topic_raw"],
+            bootstrap_servers=self.config["kafka_bootstrap_servers"],
+            group_id=self.config["kafka_consumer_group"],
             enable_auto_commit=False,
             auto_offset_reset="earliest",
             key_deserializer=lambda k: k.decode("utf-8") if k else None,
             value_deserializer=lambda v: json.loads(v.decode("utf-8")),
+        )
+
+    def _reconnect(self, error=None) -> None:
+        try:
+            self.consumer.close()
+        except Exception:
+            pass
+        self.consumer = self._connect_consumer()
+        self.log(
+            "warn",
+            "consumer reconnecting",
+            error=str(error) if error else None,
+            group=self.config["kafka_consumer_group"],
         )
 
     def _flush_group(self, event_date: str, event_hour: str, events: list[dict]) -> bool:
@@ -141,25 +157,37 @@ class RawSinkConsumer:
                     backoff = min(backoff * 2, CIRCUIT_BREAKER_MAX_BACKOFF)
                     continue
 
-                records = self.consumer.poll(timeout_ms=poll_timeout_ms, max_records=500)
-                for topic_partition, messages in records.items():
-                    for msg in messages:
-                        event = msg.value
-                        if event is not None:
-                            self.buffer.add(event)
+                try:
+                    records = self.consumer.poll(timeout_ms=poll_timeout_ms, max_records=500)
+                    for topic_partition, messages in records.items():
+                        for msg in messages:
+                            event = msg.value
+                            if event is not None:
+                                self.buffer.add(event)
 
-                if self.buffer.should_flush():
-                    if self._flush():
-                        consecutive_failures = 0
-                        backoff = 1.0
-                    else:
-                        consecutive_failures += 1
-                        if consecutive_failures < CIRCUIT_BREAKER_THRESHOLD:
-                            self.log(
-                                "warn",
-                                "flush failed, retrying next cycle",
-                                consecutive_failures=consecutive_failures,
-                            )
+                    if self.buffer.should_flush():
+                        if self._flush():
+                            consecutive_failures = 0
+                            backoff = 1.0
+                        else:
+                            consecutive_failures += 1
+                            if consecutive_failures < CIRCUIT_BREAKER_THRESHOLD:
+                                self.log(
+                                    "warn",
+                                    "flush failed, retrying next cycle",
+                                    consecutive_failures=consecutive_failures,
+                                )
+                except Exception as exc:
+                    self.log(
+                        "error",
+                        "consumer error, reconnecting",
+                        error=str(exc),
+                        consecutive_failures=consecutive_failures,
+                    )
+                    self._reconnect(error=exc)
+                    time.sleep(min(backoff, CIRCUIT_BREAKER_MAX_BACKOFF))
+                    consecutive_failures += 1
+                    backoff = min(backoff * 2, CIRCUIT_BREAKER_MAX_BACKOFF)
         except KeyboardInterrupt:
             pass
         finally:
