@@ -3,3 +3,6 @@ venv/
 __pycache__/
 profiling/data/
 *.pyc
+.DS_Store
+maritime_real_time_data_platform_product_knowledge.md
+PRD.md
