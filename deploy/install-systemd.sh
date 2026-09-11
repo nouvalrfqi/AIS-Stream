@@ -11,12 +11,19 @@ SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
 SRC="$ROOT/deploy/systemd"
 ENV_SRC="$ROOT/.env"
 ENV_SYSTEMD="$ROOT/.env.systemd"
-NGINX_AVAILABLE="${NGINX_AVAILABLE:-/etc/nginx/sites-available}"
-NGINX_ENABLED="${NGINX_ENABLED:-/etc/nginx/sites-enabled}"
+# RHEL-family nginx (incl. Amazon Linux 2023) only includes /etc/nginx/conf.d/*.conf.
+# Debian-family also includes conf.d/*.conf, so conf.d works portably on both.
+NGINX_CONFDIR="${NGINX_CONFDIR:-/etc/nginx/conf.d}"
 NGINX_SITE="maritime-tracking"
 
+cleanup_legacy_site() {
+  # Remove earlier Debian-style sites-enabled layout if present from a prior run.
+  rm -f /etc/nginx/sites-enabled/$NGINX_SITE /etc/nginx/sites-available/$NGINX_SITE 2>/dev/null || true
+}
+
 uninstall_nginx() {
-  rm -f "$NGINX_ENABLED/$NGINX_SITE" "$NGINX_AVAILABLE/$NGINX_SITE"
+  rm -f "$NGINX_CONFDIR/$NGINX_SITE.conf"
+  cleanup_legacy_site
   if command -v nginx >/dev/null 2>&1; then
     nginx -t >/dev/null 2>&1 && nginx -s reload 2>/dev/null || true
   fi
@@ -68,14 +75,13 @@ if [[ "$ROOT" == *" "* ]]; then
   exit 0
 fi
 
-install -d "$NGINX_AVAILABLE"
-sed "s|<ROOT>|$ROOT|g" "$ROOT/deploy/nginx.conf" > "$NGINX_AVAILABLE/$NGINX_SITE"
-chmod 644 "$NGINX_AVAILABLE/$NGINX_SITE"
-install -d "$NGINX_ENABLED"
-ln -sf "$NGINX_AVAILABLE/$NGINX_SITE" "$NGINX_ENABLED/$NGINX_SITE"
+install -d "$NGINX_CONFDIR"
+cleanup_legacy_site
+sed "s|<ROOT>|$ROOT|g" "$ROOT/deploy/nginx.conf" > "$NGINX_CONFDIR/$NGINX_SITE.conf"
+chmod 644 "$NGINX_CONFDIR/$NGINX_SITE.conf"
 if nginx -t; then
   nginx -s reload 2>/dev/null || true
-  echo "nginx site installed + reloaded: $NGINX_SITE"
+  echo "nginx site installed + reloaded: $NGINX_CONFDIR/$NGINX_SITE.conf"
 else
   echo "ERROR: nginx -t failed; site config saved but NOT reloaded" >&2
 fi
