@@ -69,6 +69,25 @@ services:
       timeout: 5s
       retries: 5
 
+  create-topics:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: maritime-create-topics
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists \
+          --topic ais.raw --partitions 8 --replication-factor 1 --config retention.ms=259200000 || \
+        kafka-topics --bootstrap-server kafka:29092 --alter \
+          --topic ais.raw --partitions 8 || true
+        kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists \
+          --topic ais.dlq --partitions 4 --replication-factor 1 --config retention.ms=604800000 || true
+        echo "Kafka topics ensured: ais.raw ais.dlq"
+    restart: "no"
+
   postgis:
     image: postgis/postgis:16-3.4
     container_name: maritime-postgis

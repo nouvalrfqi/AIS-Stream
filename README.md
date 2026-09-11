@@ -6,6 +6,8 @@ Built as a from-scratch engineering exercise with an explicit focus on **industr
 
 **Stack:** Python asyncio · Apache Kafka · PostgreSQL/PostGIS · S3 (MinIO) · Parquet · FastAPI · React · Vite · Docker
 
+**Live demo (AWS EC2, ap-southeast-1):** <http://54.169.181.19> — API docs at <http://54.169.181.19/docs>
+
 ---
 
 ## Table of Contents
